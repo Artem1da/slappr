@@ -9,7 +9,7 @@ final class SoundPlayer: ObservableObject {
     private var soundURLs: [URL] = []
     private var audioPlayer: AVAudioPlayer?
 
-    private let supportedExtensions = ["mp3", "wav", "aiff", "m4a", "caf", "aac"]
+    private let supportedExtensions = ["mp3", "wav", "aiff", "m4a", "caf", "aac", "ogg"]
 
     init() {
         loadSounds()
