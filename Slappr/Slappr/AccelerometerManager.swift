@@ -166,15 +166,17 @@ final class AccelerometerManager: ObservableObject {
 
             print("[Slappr]   - \"\(product)\" vendor=0x\(String(vendor, radix: 16)) usagePage=0x\(String(usagePage, radix: 16)) usage=0x\(String(usage, radix: 16)) reportSize=\(maxReportSize)")
 
-            // Check if this looks like an accelerometer
-            let isAccelerometer = product.lowercased().contains("accel")
+            // Check if this looks like an accelerometer:
+            // Must have report size >= 12 (3x Int32) AND match name/usage
+            let nameMatch = product.lowercased().contains("accel")
                 || product.lowercased().contains("motion")
                 || product.lowercased().contains("spu")
-                || (usagePage == 0x20 && usage == 0x73)  // Sensor page, Accelerometer 3D
-                || (usagePage == 0x20 && usage == 0x01)  // Sensor page, Sensor
+            let usageMatch = (usagePage == 0x20 && usage == 0x73)
+                || (usagePage == 0x20 && usage == 0x01)
+            let sizeOk = maxReportSize >= 12
 
-            if isAccelerometer {
-                print("[Slappr] >>> Found accelerometer candidate: \"\(product)\"")
+            if (nameMatch || usageMatch) && sizeOk {
+                print("[Slappr] >>> Accelerometer candidate: \"\(product)\" reportSize=\(maxReportSize)")
                 let devOpenResult = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
                 if devOpenResult == kIOReturnSuccess {
                     self.device = dev
@@ -216,9 +218,25 @@ final class AccelerometerManager: ObservableObject {
 
         print("[Slappr]   Found \(deviceSet.count) matching device(s)")
 
-        for dev in deviceSet {
+        // Sort candidates by report size descending — real accelerometer has largest reports
+        let sorted = deviceSet.sorted { dev1, dev2 in
+            let size1 = IOHIDDeviceGetProperty(dev1, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? 0
+            let size2 = IOHIDDeviceGetProperty(dev2, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? 0
+            return size1 > size2
+        }
+
+        for dev in sorted {
             let product = IOHIDDeviceGetProperty(dev, kIOHIDProductKey as CFString) as? String ?? "unknown"
-            print("[Slappr]   Trying to open: \"\(product)\"")
+            let maxReportSize = IOHIDDeviceGetProperty(dev, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? 0
+            let vendor = IOHIDDeviceGetProperty(dev, kIOHIDVendorIDKey as CFString) as? Int ?? 0
+
+            print("[Slappr]   - \"\(product)\" vendor=0x\(String(vendor, radix: 16)) reportSize=\(maxReportSize)")
+
+            // Skip devices with tiny reports — not real accelerometers
+            guard maxReportSize >= 12 else {
+                print("[Slappr]     Skipping (report too small for 3-axis data)")
+                continue
+            }
 
             let devOpenResult = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
             if devOpenResult == kIOReturnSuccess {
