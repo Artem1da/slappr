@@ -10,7 +10,10 @@ final class AppState: ObservableObject {
         accelerometer.onSlapDetected = { [weak self] in
             self?.soundPlayer.playRandomSound()
         }
-        accelerometer.startMonitoring()
+        // Defer IOKit initialization until after the app's run loop is fully set up
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.accelerometer.startMonitoring()
+        }
     }
 }
 

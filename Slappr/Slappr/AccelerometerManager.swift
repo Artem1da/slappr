@@ -95,6 +95,8 @@ final class AccelerometerManager: ObservableObject {
         let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
         guard openResult == kIOReturnSuccess else {
             print("[Slappr] Failed to open HID manager: \(openResult)")
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+            self.manager = nil
             return false
         }
 
