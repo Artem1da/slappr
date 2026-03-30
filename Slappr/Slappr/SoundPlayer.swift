@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import AVFoundation
 
 /// Manages a collection of bundled sounds and plays a random one on demand.

@@ -24,10 +24,11 @@ xcodebuild \
     -derivedDataPath "$BUILD_DIR/DerivedData" \
     -archivePath "$BUILD_DIR/$APP_NAME.xcarchive" \
     archive \
+    ARCHS=arm64 \
+    ONLY_ACTIVE_ARCH=YES \
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=NO \
-    ONLY_ACTIVE_ARCH=NO
+    CODE_SIGNING_ALLOWED=NO
 
 # Extract the .app from the archive
 APP_PATH="$BUILD_DIR/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app"
