@@ -58,6 +58,10 @@ fi
 # Copy to build root for easy access
 cp -R "$APP_PATH" "$BUILD_DIR/$APP_NAME.app"
 
+# Ad-hoc sign the app (required for IOKit HID access on modern macOS)
+echo "🔏 Signing app (ad-hoc)..."
+codesign --force --deep --sign - "$BUILD_DIR/$APP_NAME.app"
+
 # Verify Sounds are in the bundle
 SOUNDS_IN_BUNDLE="$BUILD_DIR/$APP_NAME.app/Contents/Resources/Sounds"
 if [ -d "$SOUNDS_IN_BUNDLE" ]; then

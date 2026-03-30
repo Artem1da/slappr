@@ -8,6 +8,7 @@ final class AccelerometerManager: ObservableObject {
 
     @Published var isMonitoring = false
     @Published var lastMagnitude: Double = 0.0
+    @Published var statusMessage: String = "Готов к запуску"
 
     /// Sensitivity threshold in g-force delta. Lower = more sensitive.
     @Published var sensitivity: Double = 1.8
@@ -19,19 +20,17 @@ final class AccelerometerManager: ObservableObject {
     private var manager: IOHIDManager?
     private var pollingTimer: DispatchSourceTimer?
     private var lastSlapTime: Date = .distantPast
-    private var baselineMagnitude: Double = 1.0 // ~1g from gravity
+    private var baselineMagnitude: Double = 1.0
 
-    /// Cooldown between slap detections (seconds).
     private let cooldown: TimeInterval = 0.5
 
-    // MARK: - Report parsing constants
-    // Apple Silicon accelerometer HID report layout:
-    // 22 bytes total, x/y/z as Int32 at byte offsets 2, 6, 10
-    // Divide by 65536.0 to get acceleration in g
-    private let reportLength = 22
-    private let xOffset = 2
-    private let yOffset = 6
-    private let zOffset = 10
+    // Report parsing: Apple Silicon accelerometer sends reports with
+    // x/y/z as little-endian Int32 values. The exact offsets and report
+    // size may vary by model, so we try common layouts.
+    private var reportSize = 0
+    private var xOffset = 0
+    private var yOffset = 0
+    private var zOffset = 0
     private let scaleFactor: Double = 65536.0
 
     deinit {
@@ -43,10 +42,12 @@ final class AccelerometerManager: ObservableObject {
     func startMonitoring() {
         guard !isMonitoring else { return }
 
+        updateStatus("Поиск акселерометра...")
         if openAccelerometer() {
             startPolling()
             DispatchQueue.main.async {
                 self.isMonitoring = true
+                self.statusMessage = "Мониторинг активен"
             }
         }
     }
@@ -67,6 +68,7 @@ final class AccelerometerManager: ObservableObject {
 
         DispatchQueue.main.async {
             self.isMonitoring = false
+            self.statusMessage = "Мониторинг выключен"
         }
     }
 
@@ -81,81 +83,206 @@ final class AccelerometerManager: ObservableObject {
     // MARK: - IOKit HID Setup
 
     private func openAccelerometer() -> Bool {
-        let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-        self.manager = manager
+        // Try multiple matching strategies
+        let strategies: [() -> Bool] = [
+            matchByProductName,
+            matchByUsagePage,
+            matchAllAndFilter
+        ]
 
-        // Match AppleSPUHIDDevice (Apple Silicon MEMS accelerometer)
+        for strategy in strategies {
+            if strategy() {
+                return true
+            }
+        }
+
+        updateStatus("Акселерометр не найден")
+        return false
+    }
+
+    /// Strategy 1: Match by product name "Accelerometer"
+    private func matchByProductName() -> Bool {
+        print("[Slappr] Trying match by product name 'Accelerometer'...")
         let matchingDict: [String: Any] = [
             kIOHIDProductKey: "Accelerometer"
         ]
-
-        IOHIDManagerSetDeviceMatching(manager, matchingDict as CFDictionary)
-        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
-
-        let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard openResult == kIOReturnSuccess else {
-            print("[Slappr] Failed to open HID manager: \(openResult)")
-            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
-            self.manager = nil
-            return false
-        }
-
-        // Get matching devices
-        guard let deviceSet = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>,
-              let accelerometer = deviceSet.first else {
-            print("[Slappr] No accelerometer device found. Is this an Apple Silicon Mac?")
-            // Try alternative matching
-            return openAccelerometerFallback()
-        }
-
-        self.device = accelerometer
-
-        let deviceOpenResult = IOHIDDeviceOpen(accelerometer, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard deviceOpenResult == kIOReturnSuccess else {
-            print("[Slappr] Failed to open accelerometer device: \(deviceOpenResult)")
-            return false
-        }
-
-        print("[Slappr] Accelerometer connected successfully")
-        return true
+        return tryOpenWithMatching(matchingDict)
     }
 
-    /// Fallback: try matching by usage page (Generic Desktop / Motion)
-    private func openAccelerometerFallback() -> Bool {
-        guard let manager = self.manager else { return false }
-
-        // Usage Page 0x01 (Generic Desktop), Usage 0x00D (Portable Device Motion)
-        // or try matching all HID devices and filter
-        let matchingDict: [String: Any] = [
-            kIOHIDDeviceUsagePageKey: 0x01,  // Generic Desktop
-            kIOHIDDeviceUsageKey: 0x38       // Multi-Axis Controller
+    /// Strategy 2: Match by HID usage page (Sensor / Motion)
+    private func matchByUsagePage() -> Bool {
+        // Try several usage page / usage combinations
+        let combos: [(Int, Int, String)] = [
+            (0x20, 0x73, "Sensor/Motion3D"),        // Sensor page, Accelerometer 3D
+            (0x01, 0x38, "GenericDesktop/MultiAxis"), // Generic Desktop, Multi-Axis
+            (0x01, 0x08, "GenericDesktop/MultiAxis2"),
         ]
+        for (page, usage, name) in combos {
+            print("[Slappr] Trying match by usage page: \(name) (0x\(String(page, radix: 16))/0x\(String(usage, radix: 16)))...")
+            let matchingDict: [String: Any] = [
+                kIOHIDDeviceUsagePageKey: page,
+                kIOHIDDeviceUsageKey: usage
+            ]
+            if tryOpenWithMatching(matchingDict) {
+                return true
+            }
+        }
+        return false
+    }
 
-        IOHIDManagerSetDeviceMatching(manager, matchingDict as CFDictionary)
+    /// Strategy 3: Open all HID devices and find one that looks like an accelerometer
+    private func matchAllAndFilter() -> Bool {
+        print("[Slappr] Trying to enumerate all HID devices...")
 
-        guard let deviceSet = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>,
-              let accelerometer = deviceSet.first else {
-            print("[Slappr] No accelerometer found via fallback matching either.")
+        cleanup()
+        let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        self.manager = mgr
+
+        // Match all HID devices
+        IOHIDManagerSetDeviceMatching(mgr, nil)
+        IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+
+        let openResult = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+        guard openResult == kIOReturnSuccess else {
+            print("[Slappr] Failed to open HID manager for enumeration: \(String(format: "0x%08x", openResult))")
+            cleanup()
             return false
         }
 
-        self.device = accelerometer
-
-        let deviceOpenResult = IOHIDDeviceOpen(accelerometer, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard deviceOpenResult == kIOReturnSuccess else {
-            print("[Slappr] Failed to open accelerometer device (fallback): \(deviceOpenResult)")
+        guard let deviceSet = IOHIDManagerCopyDevices(mgr) as? Set<IOHIDDevice> else {
+            print("[Slappr] No HID devices found at all")
+            cleanup()
             return false
         }
 
-        print("[Slappr] Accelerometer connected via fallback matching")
-        return true
+        print("[Slappr] Found \(deviceSet.count) HID devices total:")
+
+        for dev in deviceSet {
+            let product = IOHIDDeviceGetProperty(dev, kIOHIDProductKey as CFString) as? String ?? "unknown"
+            let vendor = IOHIDDeviceGetProperty(dev, kIOHIDVendorIDKey as CFString) as? Int ?? 0
+            let usagePage = IOHIDDeviceGetProperty(dev, kIOHIDPrimaryUsagePageKey as CFString) as? Int ?? 0
+            let usage = IOHIDDeviceGetProperty(dev, kIOHIDPrimaryUsageKey as CFString) as? Int ?? 0
+            let maxReportSize = IOHIDDeviceGetProperty(dev, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? 0
+
+            print("[Slappr]   - \"\(product)\" vendor=0x\(String(vendor, radix: 16)) usagePage=0x\(String(usagePage, radix: 16)) usage=0x\(String(usage, radix: 16)) reportSize=\(maxReportSize)")
+
+            // Check if this looks like an accelerometer
+            let isAccelerometer = product.lowercased().contains("accel")
+                || product.lowercased().contains("motion")
+                || product.lowercased().contains("spu")
+                || (usagePage == 0x20 && usage == 0x73)  // Sensor page, Accelerometer 3D
+                || (usagePage == 0x20 && usage == 0x01)  // Sensor page, Sensor
+
+            if isAccelerometer {
+                print("[Slappr] >>> Found accelerometer candidate: \"\(product)\"")
+                let devOpenResult = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+                if devOpenResult == kIOReturnSuccess {
+                    self.device = dev
+                    configureReportLayout(for: dev)
+                    print("[Slappr] Accelerometer opened successfully!")
+                    return true
+                } else {
+                    print("[Slappr] Failed to open device: \(String(format: "0x%08x", devOpenResult))")
+                }
+            }
+        }
+
+        print("[Slappr] No accelerometer found among HID devices")
+        cleanup()
+        return false
+    }
+
+    private func tryOpenWithMatching(_ matchingDict: [String: Any]) -> Bool {
+        cleanup()
+        let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        self.manager = mgr
+
+        IOHIDManagerSetDeviceMatching(mgr, matchingDict as CFDictionary)
+        IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+
+        let openResult = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+        guard openResult == kIOReturnSuccess else {
+            print("[Slappr]   HID manager open failed: \(String(format: "0x%08x", openResult))")
+            cleanup()
+            return false
+        }
+
+        guard let deviceSet = IOHIDManagerCopyDevices(mgr) as? Set<IOHIDDevice>,
+              !deviceSet.isEmpty else {
+            print("[Slappr]   No devices matched")
+            cleanup()
+            return false
+        }
+
+        print("[Slappr]   Found \(deviceSet.count) matching device(s)")
+
+        for dev in deviceSet {
+            let product = IOHIDDeviceGetProperty(dev, kIOHIDProductKey as CFString) as? String ?? "unknown"
+            print("[Slappr]   Trying to open: \"\(product)\"")
+
+            let devOpenResult = IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone))
+            if devOpenResult == kIOReturnSuccess {
+                self.device = dev
+                configureReportLayout(for: dev)
+                print("[Slappr]   Opened successfully!")
+                return true
+            } else {
+                print("[Slappr]   Failed to open: \(String(format: "0x%08x", devOpenResult))")
+            }
+        }
+
+        cleanup()
+        return false
+    }
+
+    private func configureReportLayout(for device: IOHIDDevice) {
+        let maxReport = IOHIDDeviceGetProperty(device, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? 0
+        print("[Slappr] Device max report size: \(maxReport) bytes")
+
+        // Common layouts for Apple Silicon accelerometers
+        if maxReport >= 22 {
+            reportSize = 22
+            xOffset = 2
+            yOffset = 6
+            zOffset = 10
+        } else if maxReport >= 12 {
+            reportSize = maxReport
+            xOffset = 0
+            yOffset = 4
+            zOffset = 8
+        } else {
+            // Use whatever size we get
+            reportSize = max(maxReport, 22)
+            xOffset = 2
+            yOffset = 6
+            zOffset = 10
+        }
+
+        print("[Slappr] Using report layout: size=\(reportSize) x=\(xOffset) y=\(yOffset) z=\(zOffset)")
+    }
+
+    private func cleanup() {
+        if let device = device {
+            IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+            self.device = nil
+        }
+        if let manager = manager {
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+            self.manager = nil
+        }
+    }
+
+    private func updateStatus(_ msg: String) {
+        print("[Slappr] \(msg)")
+        DispatchQueue.main.async {
+            self.statusMessage = msg
+        }
     }
 
     // MARK: - Polling
 
     private func startPolling() {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInteractive))
-        // Poll at 60 Hz
         timer.schedule(deadline: .now(), repeating: .milliseconds(16))
         timer.setEventHandler { [weak self] in
             self?.readAccelerometerData()
@@ -167,22 +294,21 @@ final class AccelerometerManager: ObservableObject {
     private func readAccelerometerData() {
         guard let device = device else { return }
 
-        var report = [UInt8](repeating: 0, count: reportLength)
-        var reportLength = report.count
+        var report = [UInt8](repeating: 0, count: max(reportSize, 22))
+        var length = report.count
 
         let result = IOHIDDeviceGetReport(
             device,
             kIOHIDReportTypeInput,
-            0,  // Report ID
+            0,
             &report,
-            &reportLength
+            &length
         )
 
-        guard result == kIOReturnSuccess, reportLength >= self.reportLength else {
+        guard result == kIOReturnSuccess, length >= 12 else {
             return
         }
 
-        // Parse x, y, z acceleration values (Int32 at known offsets)
         let x = readInt32(from: report, at: xOffset)
         let y = readInt32(from: report, at: yOffset)
         let z = readInt32(from: report, at: zOffset)
@@ -193,27 +319,23 @@ final class AccelerometerManager: ObservableObject {
 
         let magnitude = sqrt(gX * gX + gY * gY + gZ * gZ)
 
-        // Update displayed magnitude on main thread
         DispatchQueue.main.async {
             self.lastMagnitude = magnitude
         }
 
-        // Detect slap: sudden spike above baseline + threshold
         let delta = abs(magnitude - baselineMagnitude)
 
         if delta > sensitivity {
             let now = Date()
             if now.timeIntervalSince(lastSlapTime) > cooldown {
                 lastSlapTime = now
-                print("[Slappr] SLAP detected! delta=\(String(format: "%.2f", delta))g, magnitude=\(String(format: "%.2f", magnitude))g")
+                print("[Slappr] SLAP! delta=\(String(format: "%.2f", delta))g mag=\(String(format: "%.2f", magnitude))g")
                 DispatchQueue.main.async {
                     self.onSlapDetected?()
                 }
             }
         }
 
-        // Slowly adapt baseline using exponential moving average
-        // This handles gradual orientation changes without masking impacts
         baselineMagnitude = baselineMagnitude * 0.999 + magnitude * 0.001
     }
 

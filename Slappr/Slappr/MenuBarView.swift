@@ -25,7 +25,7 @@ struct MenuBarView: View {
                 Circle()
                     .fill(accelerometer.isMonitoring ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
-                Text(accelerometer.isMonitoring ? "Мониторинг активен" : "Мониторинг выключен")
+                Text(accelerometer.statusMessage)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
