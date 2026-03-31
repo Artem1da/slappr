@@ -15,8 +15,16 @@ echo "🔨 Building $APP_NAME..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-# Build with xcodebuild
+# Clean previous Xcode build cache to ensure fresh resources
 cd "$PROJECT_DIR"
+xcodebuild \
+    -project "$APP_NAME.xcodeproj" \
+    -scheme "$APP_NAME" \
+    -configuration Release \
+    -derivedDataPath "$BUILD_DIR/DerivedData" \
+    clean 2>/dev/null || true
+
+# Build with xcodebuild
 xcodebuild \
     -project "$APP_NAME.xcodeproj" \
     -scheme "$APP_NAME" \

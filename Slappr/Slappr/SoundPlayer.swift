@@ -43,15 +43,7 @@ final class SoundPlayer: ObservableObject {
 
         } catch {
             print("[Slappr] Error reading Sounds directory: \(error)")
-
-            // Fallback: search the entire bundle for audio files
-            for ext in supportedExtensions {
-                if let urls = Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: nil) {
-                    soundURLs.append(contentsOf: urls)
-                }
-            }
-            soundCount = soundURLs.count
-            print("[Slappr] Fallback: found \(soundCount) sounds in bundle root")
+            soundCount = 0
         }
     }
 
