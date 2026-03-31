@@ -11,6 +11,37 @@ APP_NAME="Slappr"
 
 echo "🔨 Building $APP_NAME..."
 
+# Generate app icon from slappr.png
+ICON_SOURCE="$SCRIPT_DIR/slappr.png"
+ICON_DIR="$PROJECT_DIR/Slappr/Assets.xcassets/AppIcon.appiconset"
+if [ -f "$ICON_SOURCE" ]; then
+    echo "🎨 Generating app icons from slappr.png..."
+    for size in 16 32 64 128 256 512 1024; do
+        sips -z $size $size "$ICON_SOURCE" --out "$ICON_DIR/icon_${size}.png" >/dev/null 2>&1
+    done
+    # Write Contents.json with all icon sizes
+    cat > "$ICON_DIR/Contents.json" << 'ICONJSON'
+{
+  "images" : [
+    { "filename" : "icon_16.png",   "idiom" : "mac", "scale" : "1x", "size" : "16x16" },
+    { "filename" : "icon_32.png",   "idiom" : "mac", "scale" : "2x", "size" : "16x16" },
+    { "filename" : "icon_32.png",   "idiom" : "mac", "scale" : "1x", "size" : "32x32" },
+    { "filename" : "icon_64.png",   "idiom" : "mac", "scale" : "2x", "size" : "32x32" },
+    { "filename" : "icon_128.png",  "idiom" : "mac", "scale" : "1x", "size" : "128x128" },
+    { "filename" : "icon_256.png",  "idiom" : "mac", "scale" : "2x", "size" : "128x128" },
+    { "filename" : "icon_256.png",  "idiom" : "mac", "scale" : "1x", "size" : "256x256" },
+    { "filename" : "icon_512.png",  "idiom" : "mac", "scale" : "2x", "size" : "256x256" },
+    { "filename" : "icon_512.png",  "idiom" : "mac", "scale" : "1x", "size" : "512x512" },
+    { "filename" : "icon_1024.png", "idiom" : "mac", "scale" : "2x", "size" : "512x512" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}
+ICONJSON
+    echo "✅ Icons generated"
+else
+    echo "⚠️  slappr.png not found, skipping icon generation"
+fi
+
 # Clean previous build
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"

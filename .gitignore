@@ -16,6 +16,9 @@ xcuserdata/
 Packages/
 Package.resolved
 
+# Generated app icons (built from slappr.png)
+Slappr/Slappr/Assets.xcassets/AppIcon.appiconset/icon_*.png
+
 # macOS
 .DS_Store
 *.swp
