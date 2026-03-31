@@ -19,6 +19,7 @@ final class AccelerometerManager: ObservableObject {
     private var reportBuffer = [UInt8](repeating: 0, count: 256)
 
     private let cooldown: TimeInterval = 0.5
+    private var reportCount: Int = 0
 
     // Layout determined at runtime
     private var xOffset = 0
@@ -101,11 +102,18 @@ final class AccelerometerManager: ObservableObject {
             candidates.append((dev, maxReport))
         }
 
-        // Sort by report size descending — but skip obviously wrong sizes (< 6 bytes)
-        // The real accelerometer on Apple Silicon reports 22 bytes
-        let sorted = candidates
-            .filter { $0.reportSize >= 6 }
-            .sorted { $0.reportSize > $1.reportSize }
+        // The real accelerometer on Apple Silicon has reportSize=22.
+        // Prefer exactly 22, then 14, then others in ascending order.
+        let filtered = candidates.filter { $0.reportSize >= 6 }
+        let sorted = filtered.sorted { a, b in
+            // Priority: 22 > 14 > everything else (smaller first)
+            func priority(_ size: Int) -> Int {
+                if size == 22 { return 0 }
+                if size == 14 { return 1 }
+                return 2 + size  // deprioritize large unknown devices
+            }
+            return priority(a.reportSize) < priority(b.reportSize)
+        }
 
         print("[Slappr] Candidates (reportSize >= 6): \(sorted.map { $0.reportSize })")
 
@@ -192,6 +200,14 @@ final class AccelerometerManager: ObservableObject {
         }
 
         let magnitude = sqrt(gX * gX + gY * gY + gZ * gZ)
+
+        // Debug: log first 5 reports to verify data parsing
+        reportCount += 1
+        if reportCount <= 5 {
+            let hexBytes = arr.prefix(min(24, arr.count)).map { String(format: "%02x", $0) }.joined(separator: " ")
+            print("[Slappr] Report #\(reportCount) len=\(length) raw: \(hexBytes)")
+            print("[Slappr]   x=\(String(format: "%.4f", gX))g y=\(String(format: "%.4f", gY))g z=\(String(format: "%.4f", gZ))g mag=\(String(format: "%.4f", magnitude))g")
+        }
 
         DispatchQueue.main.async {
             self.lastMagnitude = magnitude
