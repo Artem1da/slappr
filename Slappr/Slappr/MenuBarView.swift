@@ -52,14 +52,14 @@ struct MenuBarView: View {
                         .font(.caption2)
                     Slider(
                         value: $accelerometer.sensitivity,
-                        in: 0.5...4.0,
-                        step: 0.1
+                        in: 0.01...1.0,
+                        step: 0.01
                     )
                     Text("Низкая")
                         .font(.caption2)
                 }
 
-                Text("Порог: \(String(format: "%.1f", accelerometer.sensitivity))g")
+                Text("Порог: \(String(format: "%.2f", accelerometer.sensitivity))g")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

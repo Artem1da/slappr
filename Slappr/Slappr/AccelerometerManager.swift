@@ -9,7 +9,7 @@ final class AccelerometerManager: ObservableObject {
     @Published var lastMagnitude: Double = 0.0
     @Published var statusMessage: String = "Готов к запуску"
 
-    @Published var sensitivity: Double = 1.8
+    @Published var sensitivity: Double = 0.5
 
     var onSlapDetected: (() -> Void)?
 
